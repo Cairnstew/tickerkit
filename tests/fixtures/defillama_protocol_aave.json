@@ -1,0 +1,19 @@
+{
+  "id": "aave",
+  "name": "Aave",
+  "symbol": "AAVE",
+  "gecko_id": "aave",
+  "category": "Lending",
+  "url": "https://aave.com",
+  "tvl": [
+    {"date": 1791440000, "totalLiquidityUSD": 17900000000.0},
+    {"date": 1791543419, "totalLiquidityUSD": 18366126691.0}
+  ],
+  "currentChainTvls": {
+    "Ethereum": 17000000000.0,
+    "Avalanche": 370777422.0,
+    "Ethereum-staking": 413406400.0,
+    "Ethereum-pool2": 1406518.0,
+    "Polygon-borrowed": 90847943.0
+  }
+}

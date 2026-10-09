@@ -1,0 +1,5 @@
+[
+  {"id":"1","slug":"solana-farm","name":"Solana Farm","symbol":"SOL","gecko_id":null,"category":"Dexs","tvl":238.91869354905504},
+  {"id":"2","slug":"solana","name":"Solana","symbol":"SOL","gecko_id":"solana","category":"Canonical Bridge","tvl":null},
+  {"id":"3","slug":"solana-ecosystem","name":"Solana Ecosystem","symbol":"SOL","gecko_id":null,"category":"Chain","tvl":6210773694.47}
+]

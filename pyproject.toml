@@ -1,0 +1,78 @@
+[project]
+name = "tickerkit"
+version = "0.1.0"
+description = "Unified, provenance-tracked crypto ticker snapshots from free, open APIs."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "ccxt>=4.4",
+    "httpx>=0.27",
+    "pandas>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "pyright>=1.1.390",
+    # Notebook support. `jupyterlab` for `jupyter lab` in a terminal; `ipykernel` is
+    # what Zed actually needs — it discovers kernels via `jupyter kernelspec list`, and
+    # an unregistered kernel means Zed offers "no kernel" for every notebook.
+    "jupyterlab>=4.2",
+    "ipykernel>=6.29",
+]
+
+[project.scripts]
+tickerkit = "tickerkit.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tickerkit"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "respx>=0.21",
+    "ruff>=0.6",
+    "pyright>=1.1.390",
+    # Notebook support. `jupyterlab` for `jupyter lab` in a terminal; `ipykernel` is
+    # what Zed actually needs — it discovers kernels via `jupyter kernelspec list`, and
+    # an unregistered kernel means Zed offers "no kernel" for every notebook.
+    "jupyterlab>=4.2",
+    "ipykernel>=6.29",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+markers = ["live: opt-in test that hits live free APIs (deselect with '-m \"not live\"')"]
+addopts = "-m 'not live'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ASYNC", "C4", "PTH", "TID"]
+# TID252 bans `from ..x import y`; the required providers/ subpackage layout makes
+# parent-relative imports the natural way to reach the parent package, so it is off.
+ignore = ["B008", "RUF001", "RUF002", "RUF003", "TID252"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.pyright]
+include = ["src/tickerkit"]
+pythonVersion = "3.12"
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+reportPrivateUsage = false

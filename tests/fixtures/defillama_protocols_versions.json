@@ -1,0 +1,56 @@
+[
+  {
+    "id": "111",
+    "slug": "aave-v2",
+    "name": "Aave V2",
+    "symbol": "AAVE",
+    "gecko_id": "aave",
+    "category": "Lending",
+    "tvl": 109050889.34
+  },
+  {
+    "id": "1599",
+    "slug": "aave-v3",
+    "name": "Aave V3",
+    "symbol": "AAVE",
+    "gecko_id": null,
+    "category": "Lending",
+    "tvl": 17331721591.68
+  },
+  {
+    "id": "2197",
+    "slug": "uniswap-v2",
+    "name": "Uniswap V2",
+    "symbol": "UNI",
+    "gecko_id": null,
+    "category": "Dexs",
+    "tvl": 1055761967.76
+  },
+  {
+    "id": "2198",
+    "slug": "uniswap-v3",
+    "name": "Uniswap V3",
+    "symbol": "UNI",
+    "gecko_id": null,
+    "category": "Dexs",
+    "tvl": 1614399124.39
+  },
+  {
+    "id": "5690",
+    "slug": "uniswap-v4",
+    "name": "Uniswap V4",
+    "symbol": "UNI",
+    "gecko_id": null,
+    "category": "Dexs",
+    "tvl": 1274392143.09
+  },
+  {
+    "id": "111",
+    "slug": "lido",
+    "name": "Lido",
+    "symbol": "LDO",
+    "gecko_id": "lido-dao",
+    "category": "Liquid Staking",
+    "tvl": 24347452807.07
+  }
+]

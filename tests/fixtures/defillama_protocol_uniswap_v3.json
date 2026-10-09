@@ -1,0 +1,8 @@
+{
+  "name": "Uniswap V3",
+  "symbol": "UNI",
+  "gecko_id": null,
+  "category": "Dexs",
+  "tvl": [{"date": 1791539975, "totalLiquidityUSD": 1614399124.0}],
+  "currentChainTvls": {"Ethereum": 1500000000}
+}

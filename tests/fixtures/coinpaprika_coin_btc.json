@@ -1,0 +1,7 @@
+{"id":"btc-bitcoin","name":"Bitcoin","symbol":"BTC","rank":1,"last_data_at":"2026-10-09T09:00:00.000Z",
+ "description":"Bitcoin is a peer-to-peer electronic cash system.",
+ "links":{"website":["https://bitcoin.org/"],"explorer":["https://blockstream.info/"],
+   "reddit":["https://www.reddit.com/r/bitcoin"],"source_code":["https://github.com/bitcoin/bitcoin"],
+   "youtube":["https://www.youtube.com/watch?v=Gc2en3nHxA4&"]},
+ "links_extended":[{"url":"https://bitcoin.org/en/blog","type":"blog"},{"url":"https://blockstream.info/","type":"explorer"}],
+ "tags":[{"id":1,"name":"Proof Of Work"},{"id":2,"name":"Payments"},{"id":3,"name":"Layer 1 (L1)"}]}

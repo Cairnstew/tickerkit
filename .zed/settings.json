@@ -1,0 +1,23 @@
+{
+  // Jupyter settings. Verified against zed-industries/zed assets/settings/default.json:
+  //   "jupyter": { "enabled": bool, "kernel_selections": { <language>: <kernel> } }
+  // There is no `jupyter.kernel` object and no `jupyter.auto_open` — the top-level
+  // `auto_open` is unrelated (on_create / on_paste / on_drop).
+  // The `tickerkit` kernelspec itself is written by tools/install_kernel.py, which pins
+  // argv to .venv/bin/python by absolute path.
+  "jupyter": {
+    "enabled": true,
+    "kernel_selections": {
+      "python": "tickerkit"
+    }
+  },
+
+  // Per-language settings live under `languages`. Do NOT put them in `file_types`:
+  // that maps a language to an array of glob patterns, which is what produces
+  // "invalid type: map, expected a set".
+  "languages": {
+    "Python": {
+      "tab_size": 4
+    }
+  }
+}

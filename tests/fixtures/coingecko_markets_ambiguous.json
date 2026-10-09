@@ -1,0 +1,17 @@
+[
+  {
+    "id": "bitcoin", "symbol": "btc", "name": "Bitcoin",
+    "current_price": 81779.0, "market_cap": 1643365584205.0,
+    "last_updated": "2026-10-09T00:41:00.000Z"
+  },
+  {
+    "id": "bitcoin-cash-sv", "symbol": "btc", "name": "Bitcoin Cash SV",
+    "current_price": 47.2, "market_cap": 940000000.0,
+    "last_updated": "2026-10-09T00:41:00.000Z"
+  },
+  {
+    "id": "bitcoin-2", "symbol": "btc", "name": "Bitcoin 2",
+    "current_price": 0.0031, "market_cap": null,
+    "last_updated": "2026-10-09T00:41:00.000Z"
+  }
+]

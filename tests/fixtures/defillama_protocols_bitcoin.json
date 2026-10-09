@@ -1,0 +1,5 @@
+[
+  {"id": "2786", "slug": "bitcoin", "name": "Bitcoin", "symbol": "BTC", "gecko_id": "bitcoin", "category": "Canonical Bridge", "tvl": null},
+  {"id": "3608", "slug": "alpha", "name": "Alpha", "symbol": "BTC", "gecko_id": null, "category": "SoFi", "tvl": 0},
+  {"id": "9999", "slug": "lido", "name": "Lido", "symbol": "LDO", "gecko_id": "lido-dao", "category": "Liquid Staking", "tvl": 9500000000}
+]

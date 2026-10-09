@@ -1,0 +1,8 @@
+{
+  "name": "Uniswap",
+  "symbol": "UNI",
+  "gecko_id": "uniswap",
+  "url": "https://app.uniswap.org",
+  "tvl": [{"date": 1791539975, "totalLiquidityUSD": 3948674870.0}],
+  "currentChainTvls": {"Ethereum": 2573231226, "Celo": 3845392, "Tempo": 25228884}
+}

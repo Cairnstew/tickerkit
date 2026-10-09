@@ -1,0 +1,21 @@
+{
+  "id": "bitcoin",
+  "symbol": "btc",
+  "name": "Bitcoin",
+  "asset_platform_id": null,
+  "platforms": {},
+  "categories": ["Layer 1 (L1)", "Proof of Work (PoW)"],
+  "description": {"en": "<p>Bitcoin is a <b>decentralised</b> digital currency.</p><p>No central authority.</p>"},
+  "links": {
+    "homepage": ["http://www.bitcoin.org", ""],
+    "whitepaper": "https://bitcoin.org/bitcoin.pdf",
+    "blockchain_site": ["https://mempool.space/", ""],
+    "official_forum_url": ["https://bitcointalk.org/"],
+    "announcement_url": [""],
+    "twitter_screen_name": "bitcoin",
+    "telegram_channel_identifier": "",
+    "subreddit_url": "https://www.reddit.com/r/Bitcoin/",
+    "repos_url": {"github": ["https://github.com/bitcoin/bitcoin"], "bitbucket": []}
+  },
+  "last_updated": "2026-10-09T00:41:00.000Z"
+}

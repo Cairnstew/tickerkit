@@ -1,0 +1,27 @@
+{
+  "status": {"timestamp": "2026-10-09T00:41:00.000Z", "error_code": 0, "error_message": null, "elapsed": 12, "credit_count": 1},
+  "data": [
+    {
+      "id": 1, "name": "Bitcoin", "symbol": "BTC",
+      "quote": {
+        "USD": {
+          "price": 81765.5,
+          "volume_24h": 42000000000.0,
+          "percent_change_24h": -1.7,
+          "market_cap": 1643000000000.0,
+          "fully_diluted_valuation": 1643000000000.0,
+          "high_24h": 83300.0,
+          "low_24h": 80300.0,
+          "circulating_supply": 20030493.0,
+          "total_supply": 20030843.0,
+          "max_supply": 21000000.0,
+          "last_updated": "2026-10-09T00:40:00.000Z",
+          "ath": 126080.0, "ath_date": "2025-10-06T18:57:42.000Z",
+          "ath_change_percentage": -35.1,
+          "atl": 67.81, "atl_date": "2013-07-06T00:00:00.000Z",
+          "atl_change_percentage": 114443.2
+        }
+      }
+    }
+  ]
+}

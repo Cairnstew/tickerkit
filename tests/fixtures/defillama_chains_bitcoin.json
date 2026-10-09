@@ -1,0 +1,4 @@
+[
+  {"gecko_id": "ethereum", "gasTokenGeckoId": "ethereum", "tvl": 51010194320.79787, "tokenSymbol": "ETH", "cmcId": "1027", "name": "Ethereum", "chainId": 1},
+  {"gecko_id": "bitcoin", "gasTokenGeckoId": "bitcoin", "tvl": 4369531827.234072, "tokenSymbol": "BTC", "cmcId": "1", "name": "Bitcoin", "chainId": null}
+]

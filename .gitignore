@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# uv cache relocated into the project by the dev shell (flake.nix)
+.uv-cache/
+# project-local Jupyter data dir, if tools/install_kernel.py is pointed at it
+.jupyter-data/
+
+# nix
+result
+result-*
+
+# NOTE: tickerkit_cache.sqlite3 is intentionally NOT ignored — it is the git-tracked
+# disk cache (see README "Caching"). Add TICKERKIT_CACHE_MAX_BYTES tweaks here, not an
+# ignore rule, to keep it small.

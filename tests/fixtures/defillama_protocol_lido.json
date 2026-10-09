@@ -1,0 +1,23 @@
+{
+  "id": "lido",
+  "name": "Lido",
+  "symbol": "LDO",
+  "gecko_id": "lido-dao",
+  "category": "Liquid Staking",
+  "chains": ["Ethereum"],
+  "url": "https://lido.fi",
+  "tvl": [
+    {"date": 1791445635, "totalLiquidityUSD": 24000000000.0},
+    {"date": 1791539435, "totalLiquidityUSD": 24347452807.0}
+  ],
+  "currentChainTvls": {
+    "Ethereum": 24341758740.8232,
+    "Terra": 0,
+    "Moonbeam": 0
+  },
+  "chainTvls": {
+    "Ethereum": {"tvl": [{"date": 1791539435, "totalLiquidityUSD": 24341758740.8232}]},
+    "staking": {"tvl": [{"date": 1791539435, "totalLiquidityUSD": 500000000.0}]},
+    "pool2": {"tvl": [{"date": 1791539435, "totalLiquidityUSD": 1.0}]}
+  }
+}
