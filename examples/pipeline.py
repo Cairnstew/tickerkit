@@ -31,14 +31,21 @@ from tickerkit.render import flat_metrics, render_report, to_records
 async def collect(
     tickers: list[str], delay: float, **kwargs: Any
 ) -> list[TickerSnapshot]:
-    """One snapshot per ticker, spaced out to respect free-tier rate limits."""
+    """One snapshot per ticker, fetched as a single concurrent batch.
+
+    No sleeping between tickers is needed: a batch shares one rate limiter per provider,
+    so twenty tickers cost the same requests-per-minute as one. ``delay`` remains as an
+    escape hatch — set it above zero only to be deliberately gentle (or to spread a batch
+    over a long window), not to stay inside a quota the library already respects.
+    """
     snaps: list[TickerSnapshot] = []
-    for i, ticker in enumerate(tickers):
-        if i:
-            # Keyless CoinGecko is IP-rate-limited; spacing keeps us inside it.
-            await asyncio.sleep(delay)
-        snaps.append(await tickerkit.aget_ticker(ticker, **kwargs))
-    return snaps
+    if delay:
+        for i, ticker in enumerate(tickers):
+            if i:
+                await asyncio.sleep(delay)
+            snaps.append(await tickerkit.aget_ticker(ticker, **kwargs))
+        return snaps
+    return await tickerkit.aget_tickers(tickers, **kwargs)
 
 
 def to_csv(rows: list[dict[str, object]]) -> str:
@@ -61,12 +68,20 @@ async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tickers", nargs="*", default=["BTC", "ETH", "SOL"])
     parser.add_argument("--csv", action="store_true", help="emit CSV instead of JSON")
-    parser.add_argument("--delay", type=float, default=6.0, help="seconds between tickers")
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=0.0,
+        help="seconds between tickers (default 0 = one concurrent batch)",
+    )
+    parser.add_argument(
+        "--concurrency", type=int, default=None, help="how many tickers to fetch at once"
+    )
     parser.add_argument("--report", metavar="TICKER", help="also print a full report")
     parser.add_argument("--venues", action="store_true", help="print per-venue records")
     args = parser.parse_args()
 
-    snaps = await collect(args.tickers, args.delay)
+    snaps = await collect(args.tickers, args.delay, concurrency=args.concurrency)
     rows = [flat_metrics(s) for s in snaps]
 
     if args.csv:

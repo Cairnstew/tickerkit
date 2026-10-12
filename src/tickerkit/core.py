@@ -12,7 +12,7 @@ import contextlib
 from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from datetime import datetime
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Literal, Protocol, cast, overload, runtime_checkable
 
 from .cache import Cache, CacheLimits, MemoryCache, NullCache, SQLiteCache
 from .capabilities import Capability
@@ -75,6 +75,35 @@ class TickerKit:
         else:
             self.cache = NullCache()
         self._providers = providers
+        #: One rate limiter per (provider, rpm), shared by every call this instance makes.
+        #:
+        #: A limiter is a token bucket over *wall-clock time for that provider*, so it is
+        #: only meaningful if it outlives a single fetch. Building one per call would make
+        #: N concurrent tickers behave like N independent clients, each entitled to the
+        #: full rpm — the exact way a batch gets an IP range throttled. Sharing means the
+        #: provider's documented limit is the budget for the whole batch, and the batch
+        #: simply queues inside it. Keyed on rpm as well as name so a per-call override
+        #: that changes the limit gets its own bucket rather than inheriting a stale one.
+        self._limiters: dict[tuple[str, int], RateLimiter] = {}
+
+    def _limiter_for(self, cls: type[Provider], config: Config) -> RateLimiter | None:
+        """The shared rate limiter for ``cls``, or ``None`` if it manages its own.
+
+        ccxt is excluded: it manages request weight internally via ``enableRateLimit``.
+        """
+        if cls.name == "ccxt":
+            return None
+        rpm_fn: object = getattr(cls, "rate_limit_rpm", None)
+        rpm: object = rpm_fn(config) if callable(rpm_fn) else config.rate_limit_rpm
+        resolved = rpm if isinstance(rpm, int) and rpm > 0 else config.rate_limit_rpm
+        if resolved <= 0:
+            return None
+        key = (cls.name, resolved)
+        limiter = self._limiters.get(key)
+        if limiter is None:
+            limiter = RateLimiter(resolved, name=cls.name)
+            self._limiters[key] = limiter
+        return limiter
 
     def _provider_classes(self) -> tuple[type[Provider], ...]:
         """The provider set for this instance.
@@ -88,15 +117,119 @@ class TickerKit:
 
     async def get_ticker(self, ticker: str, **overrides: Any) -> TickerSnapshot:
         """Build a complete snapshot for ``ticker``. This is the async core."""
-        config = self.config.with_overrides(
+        config = self._config_for(overrides)
+        async with HttpClient(config=config) as http:
+            return await self._assemble(ticker, config, http, overrides)
+
+    def _config_for(self, overrides: dict[str, Any]) -> Config:
+        """The effective config for one call: the instance default plus per-call overrides."""
+        return self.config.with_overrides(
             quote_currency=_upper(overrides.get("quote_currency")),
             exchanges=_as_tuple(overrides.get("exchanges")),
             perp_exchanges=_as_tuple(overrides.get("perp_exchanges")),
             outlier_pct=_as_float(overrides.get("outlier_pct")),
             stale_seconds=_as_float(overrides.get("stale_seconds")),
         )
+
+    @overload
+    async def get_tickers(
+        self,
+        tickers: Iterable[str],
+        *,
+        concurrency: int | None = None,
+        return_exceptions: Literal[False] = False,
+        **overrides: Any,
+    ) -> list[TickerSnapshot]: ...
+
+    @overload
+    async def get_tickers(
+        self,
+        tickers: Iterable[str],
+        *,
+        concurrency: int | None = None,
+        return_exceptions: Literal[True],
+        **overrides: Any,
+    ) -> list[TickerSnapshot | BaseException]: ...
+
+    async def get_tickers(
+        self,
+        tickers: Iterable[str],
+        *,
+        concurrency: int | None = None,
+        # The overloads above are the contract callers see; this signature is internal
+        # and only has to be wide enough to hold either branch.
+        return_exceptions: bool = False,
+        **overrides: Any,
+    ) -> Any:
+        """Build snapshots for many tickers concurrently, without multiplying the quota.
+
+        The point of this method is that adding tickers adds *concurrency*, never request
+        rate. Three things make that true, and all three are shared across the batch:
+
+        * one HTTP client, so every ticker uses the same connection pool and the same
+          safety-net limiter;
+        * one rate limiter per provider (see :meth:`_limiter_for`), so N tickers still draw
+          from the provider's documented requests-per-minute rather than N times it;
+        * one circuit breaker per source, so once a source genuinely answers 429 the
+          remaining tickers short-circuit instantly instead of each spending its own retry
+          budget collecting a copy of the same 429.
+
+        ``concurrency`` bounds how many snapshots are *assembled* at once (default
+        ``config.max_concurrency``). It is a socket/pressure knob, not a rate knob —
+        raising it makes a batch finish sooner at the same requests per minute.
+
+        Results come back in the order given, one per input element, duplicates included:
+        a ticker string repeated in the input is fetched **once** and the same snapshot
+        returned for each occurrence, so a long watchlist cannot pay twice for one asset.
+        Deduplication is on the exact string — ``"BTC"`` and ``"btc"`` are two requests,
+        because folding them would silently answer the second with the first one's data.
+
+        Like :meth:`get_ticker`, a provider failure is recorded inside the snapshot's
+        ``DataQuality`` rather than raised. ``return_exceptions`` applies only to a
+        failure of the whole snapshot (a bad override, say), and defaults to ``False``
+        to match :func:`asyncio.gather`.
+        """
+        wanted = [str(t) for t in tickers]
+        if not wanted:
+            return []
+
+        limit = _as_int(concurrency) or max(1, self.config.max_concurrency)
+        config = self._config_for(overrides)
+        sem = asyncio.Semaphore(limit)
+
+        # One task per *distinct* ticker, mapped back onto the caller's ordering. Folding
+        # duplicates here rather than after the fact means the second "BTC" neither waits
+        # on a semaphore slot nor re-spends the provider's quota.
+        tasks: dict[str, asyncio.Task[TickerSnapshot]] = {}
+
         async with HttpClient(config=config) as http:
-            return await self._assemble(ticker, config, http, overrides)
+
+            async def one(ticker: str) -> TickerSnapshot:
+                async with sem:
+                    return await self._assemble(ticker, config, http, overrides)
+
+            for ticker in dict.fromkeys(wanted):
+                tasks[ticker] = asyncio.create_task(one(ticker))
+
+            try:
+                gathered = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            finally:
+                # If this batch is cancelled, `gather` cancels the children but may return
+                # before they have finished unwinding. Awaiting them again here means no
+                # task is still in flight when the client below is closed — otherwise a
+                # cancelled batch can leave a provider issuing a request against a
+                # connection pool that has already been torn down.
+                await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+        by_ticker = dict(zip(tasks, gathered, strict=True))
+        out: list[TickerSnapshot | BaseException] = [by_ticker[t] for t in wanted]
+
+        if return_exceptions:
+            return out
+        for item in out:
+            if isinstance(item, BaseException):
+                raise item
+        return cast("list[TickerSnapshot]", out)
 
     async def get_history(
         self,
@@ -161,7 +294,7 @@ class TickerKit:
                 # DefiLlama or the exchanges from answering.
                 http=http.view(cls.name),
                 cache=self.cache,
-                limiter=_limiter_for(cls, config),
+                limiter=self._limiter_for(cls, config),
             )
             contexts[cls.name] = context
             providers[cls.name] = cls(context)
@@ -271,7 +404,7 @@ class TickerKit:
                 config=config,
                 http=http.view(cls.name),
                 cache=self.cache,
-                limiter=_limiter_for(cls, config),
+                limiter=self._limiter_for(cls, config),
             )
             contexts[cls.name] = context
             providers[cls.name] = cls(context)
@@ -430,7 +563,7 @@ class TickerKit:
                 config=config,
                 http=http.view(cls.name),
                 cache=self.cache,
-                limiter=_limiter_for(cls, config),
+                limiter=self._limiter_for(cls, config),
             )
             contexts[cls.name] = context
             resolvers[cls.name] = cls(context)
@@ -738,19 +871,6 @@ def _missing(field_name: str, reason: str) -> MissingField:
 
 def _upper(value: object) -> str | None:
     return str(value).upper() if isinstance(value, str) and value else None
-
-
-def _limiter_for(cls: type[Provider], config: Config) -> RateLimiter | None:
-    """Build the provider's own rate limiter, if it documents one.
-
-    ccxt is excluded: it manages request weight internally via ``enableRateLimit``.
-    """
-    if cls.name == "ccxt":
-        return None
-    rpm_fn: object = getattr(cls, "rate_limit_rpm", None)
-    rpm: object = rpm_fn(config) if callable(rpm_fn) else config.rate_limit_rpm
-    return RateLimiter(rpm if isinstance(rpm, int) and rpm > 0 else config.rate_limit_rpm,
-                       name=cls.name)
 
 
 @runtime_checkable

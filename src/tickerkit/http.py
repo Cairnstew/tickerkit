@@ -176,7 +176,15 @@ class HttpClient:
     eight copies of the same 429.
     """
 
-    __slots__ = ("_blocked_until", "_client", "_limiter", "_owns_client", "_policy", "source")
+    __slots__ = (
+        "_blocked_until",
+        "_client",
+        "_limiter",
+        "_owns_client",
+        "_policy",
+        "_views",
+        "source",
+    )
 
     def __init__(
         self,
@@ -201,6 +209,7 @@ class HttpClient:
         self._owns_client = client is None
         self.source = source
         self._blocked_until = 0.0
+        self._views: dict[str, HttpClient] = {}
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(config.http_timeout if config else (timeout or 15.0)),
             follow_redirects=True,
@@ -213,13 +222,23 @@ class HttpClient:
         Only the circuit breaker is private to the view, so one throttled provider never
         blocks the others. Ownership stays with the parent, so closing the parent closes
         the single underlying connection pool.
+
+        Views are memoised per source. That matters once several snapshots are fetched
+        concurrently against one client: they must agree on whether a source is already
+        exhausted. Handing each caller a fresh view would give every one of them its own
+        ``_blocked_until``, so a genuine 429 would be paid for again — retries and all —
+        by each concurrent ticker instead of being short-circuited.
         """
-        return HttpClient(
-            limiter=self._limiter,
-            retry=self._policy,
-            client=self._client,
-            source=source,
-        )
+        cached = self._views.get(source)
+        if cached is None:
+            cached = HttpClient(
+                limiter=self._limiter,
+                retry=self._policy,
+                client=self._client,
+                source=source,
+            )
+            self._views[source] = cached
+        return cached
 
     @property
     def throttled_until(self) -> float:
@@ -229,6 +248,16 @@ class HttpClient:
     @property
     def is_throttled(self) -> bool:
         return time.monotonic() < self._blocked_until
+
+    def _suppressed(self) -> RateLimitExceeded:
+        """The error raised in place of a request that must not be sent."""
+        return RateLimitExceeded(
+            self.source,
+            f"{self.source} rate limit still in effect; request suppressed",
+            retry_after=self._blocked_until - time.monotonic(),
+            hint=_limit_hint(self.source),
+            suppressed=True,
+        )
 
     async def get_json(
         self,
@@ -244,17 +273,20 @@ class HttpClient:
         """
         # Breaker first: never spend quota on a source we already know is exhausted.
         if self.is_throttled:
-            raise RateLimitExceeded(
-                self.source,
-                f"{self.source} rate limit still in effect; request suppressed",
-                retry_after=self._blocked_until - time.monotonic(),
-                hint=_limit_hint(self.source),
-                suppressed=True,
-            )
+            raise self._suppressed()
 
         last_exc: httpx.HTTPError | None = None
         for attempt in range(self._policy.max_retries + 1):
             await self._limiter.acquire()
+            # ...and again after the wait. Acquiring a rate-limit slot is itself a queue:
+            # at 60 rpm a caller can sit here for a second, and by the time its turn
+            # comes a sibling may have opened the breaker. Checking only on entry lets
+            # that caller fire a request it already knows is doomed — which is how a
+            # single real 429 turns into a whole batch of them, one retry budget per
+            # queued task. Re-checking here is what makes a shared breaker actually save
+            # quota rather than merely describe it.
+            if self.is_throttled:
+                raise self._suppressed()
             # Computed inside the handler and acted on out here: an exception raised
             # from within an `except` block is not caught by sibling handlers of the
             # same `try`, so signalling the retry in-band is the only correct option.
@@ -280,7 +312,13 @@ class HttpClient:
 
             assert throttle_delay is not None  # every path above sets it or raises
             await asyncio.sleep(throttle_delay)
-            self._blocked_until = 0.0  # cooldown elapsed; let traffic resume
+            # Deliberately *not* clearing `_blocked_until` here. Sleeping past the
+            # cooldown expires it on its own — `_throttle_delay` only ever sets a window
+            # no longer than the delay just slept. Clearing it explicitly was harmless
+            # when one client owned the breaker, but the breaker is shared: a task
+            # finishing its own retry wait would reset the suppression for every other
+            # task still queued behind it, so a genuine 429 got re-paid in full once per
+            # concurrent caller. Expiry is now the only thing that reopens the source.
         assert last_exc is not None  # pragma: no cover - loop always sets or raises
         raise last_exc
 
@@ -296,10 +334,13 @@ class HttpClient:
         advertised = parse_retry_after(headers, ceiling=self._policy.max_after)
         if attempt >= self._policy.max_retries:
             cooldown = advertised if advertised is not None else self._policy.delay_for(attempt)
-            if advertised is not None:
-                self._blocked_until = time.monotonic() + min(
-                    cooldown, self._policy.max_after
-                )
+            # Always trip the breaker, advertised hint or not. A 429 with no Retry-After
+            # is still a source telling us it is out of quota, and that fact is just as
+            # true for the next caller as it is for this one — leaving the breaker shut
+            # meant a silent server quietly handed every concurrent ticker its own full
+            # retry budget. Gating on `advertised` here meant the protection applied only
+            # to the servers polite enough to say how long to wait.
+            self._blocked_until = time.monotonic() + min(cooldown, self._policy.max_after)
             raise RateLimitExceeded(
                 self.source,
                 f"{self.source} returned HTTP 429 after {attempt + 1} attempt(s)",

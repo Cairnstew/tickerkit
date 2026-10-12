@@ -3,6 +3,10 @@
     tickerkit BTC --json
     tickerkit ETH --summary
     tickerkit BTC --frames ohlcv venues
+    tickerkit BTC ETH SOL --metrics
+
+More than one ticker is fetched concurrently under a shared rate limit, so a watchlist
+costs the same requests-per-minute as a single ticker.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import json
 import sys
 from typing import Any
 
-from . import __version__, aget_history, aget_ticker
+from . import __version__, aget_history, aget_tickers
 from .cache import SQLiteCache
 from .config import Config
 from .models import HistoryResult, TickerSnapshot, jsonify
@@ -33,7 +37,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="tickerkit",
         description="Fetch a complete, provenance-tracked snapshot for a crypto ticker.",
     )
-    parser.add_argument("ticker", help="e.g. BTC, ETH, SOL, BTC/USDT")
+    parser.add_argument(
+        "ticker", nargs="+", metavar="TICKER", help="e.g. BTC, ETH, SOL, BTC/USDT"
+    )
     parser.add_argument(
         "--history",
         action="store_true",
@@ -89,6 +95,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--no-cache", action="store_true", help="bypass the TTL cache")
     parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        metavar="N",
+        help="how many tickers to fetch at once (default 8, or TICKERKIT_MAX_CONCURRENCY)",
+    )
+    parser.add_argument(
         "--show-errors",
         action="store_true",
         help="print tolerated provider errors and missing-field explanations",
@@ -97,11 +110,17 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def _fetch(args: argparse.Namespace) -> TickerSnapshot:
+async def _fetch(args: argparse.Namespace) -> list[TickerSnapshot]:
+    """Every requested ticker, fetched as one concurrent batch.
+
+    One batch rather than N calls is deliberate: the batch shares a single connection
+    pool and a single rate limiter per provider, so the upstream sees the same
+    requests-per-minute no matter how many tickers were asked for.
+    """
     config = Config.from_env()
     if args.no_cache:
         config = config.with_overrides(cache_enabled=False)
-    return await aget_ticker(args.ticker, config=config, **_overrides(args))
+    return await aget_tickers(args.ticker, config=config, **_overrides(args))
 
 
 def _overrides(args: argparse.Namespace) -> dict[str, Any]:
@@ -152,6 +171,16 @@ def _render(frame: Any) -> str:
     return frame.to_string()
 
 
+def _banner(snapshot: TickerSnapshot, total: int) -> None:
+    """Label a snapshot when a batch printed several, so the blocks stay separable.
+
+    Silent for a single ticker: the one-ticker output must stay byte-for-byte what it was
+    before multi-ticker support existed.
+    """
+    if total > 1:
+        print(f"===== {snapshot.query} =====")
+
+
 def _print_frames(frames: dict[str, Any], requested: list[str] | None) -> None:
     """Print the named DataFrames, or all of them when none were named."""
     if not frames:
@@ -166,11 +195,21 @@ def _print_frames(frames: dict[str, Any], requested: list[str] | None) -> None:
 
 
 async def _run_history(args: argparse.Namespace) -> int:
+    if len(args.ticker) > 1:
+        # History is one window at a time and is the expensive path — a deep backfill can
+        # spend dozens of upstream calls per asset. Silently fetching only the first would
+        # hide the rest, so say so instead of guessing.
+        print(
+            "--history takes a single ticker; got "
+            f"{len(args.ticker)}. Run them one at a time.",
+            file=sys.stderr,
+        )
+        return 2
     config = Config.from_env()
     if args.no_cache:
         config = config.with_overrides(cache_enabled=False)
     result: HistoryResult = await aget_history(
-        args.ticker,
+        args.ticker[0],
         config=config,
         timeframe=args.timeframe,
         start=args.start,
@@ -207,30 +246,44 @@ async def _run(args: argparse.Namespace) -> int:
     if args.history:
         return await _run_history(args)
 
-    snapshot = await _fetch(args)
+    snapshots = await _fetch(args)
 
     if args.frames is not None:
-        _print_frames(snapshot.to_dataframes(), args.frames)
+        for snap in snapshots:
+            _banner(snap, len(snapshots))
+            _print_frames(snap.to_dataframes(), args.frames)
     elif args.metrics:
-        # One flat row per asset: the pipeline-friendly shape.
-        print(json.dumps(jsonify(flat_metrics(snapshot)), indent=2, default=str))
+        # One flat row per asset: the pipeline-friendly shape. A single ticker keeps the
+        # bare-object shape so existing one-shot pipelines keep parsing unchanged.
+        rows = [jsonify(flat_metrics(snap)) for snap in snapshots]
+        print(json.dumps(rows if len(rows) > 1 else rows[0], indent=2, default=str))
     elif args.report:
-        print(render_report(snapshot))
+        for snap in snapshots:
+            _banner(snap, len(snapshots))
+            print(render_report(snap))
     elif args.markdown:
-        print(render_markdown(snapshot))
+        for snap in snapshots:
+            _banner(snap, len(snapshots))
+            print(render_markdown(snap))
     elif args.json:
-        print(snapshot.to_json())
+        docs = [json.loads(snap.to_json()) for snap in snapshots]
+        print(json.dumps(docs if len(docs) > 1 else docs[0], indent=2, default=str))
     else:
-        print(snapshot.summary())
-        price_prov = snapshot.market.provenance.get("aggregated")
-        if price_prov is not None:
-            print(f"  source    {price_prov.source} @ {price_prov.fetched_at.isoformat()}")
+        for snap in snapshots:
+            _banner(snap, len(snapshots))
+            print(snap.summary())
+            price_prov = snap.market.provenance.get("aggregated")
+            if price_prov is not None:
+                print(f"  source    {price_prov.source} @ {price_prov.fetched_at.isoformat()}")
 
     if args.show_errors:
-        _print_quality(snapshot)
+        for snap in snapshots:
+            _print_quality(snap)
 
-    # A snapshot with no price at all is a failure worth a non-zero exit.
-    return 0 if snapshot.market.price is not None else 1
+    # A snapshot with no price at all is a failure worth a non-zero exit. With several
+    # tickers the batch fails if *any* of them has no price, so a shell loop over a
+    # watchlist still notices the one asset that could not be priced.
+    return 0 if all(s.market.price is not None for s in snapshots) else 1
 
 
 def _build_cache_parser() -> argparse.ArgumentParser:

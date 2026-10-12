@@ -15,7 +15,13 @@ TICKERKIT_HTTP_TIMEOUT
     Per-request timeout in seconds. Default ``15``.
 TICKERKIT_RATE_LIMIT
     Safety-net requests-per-minute cap. Each provider additionally applies its own
-    documented limit, which takes precedence when stricter. Default ``60``.
+    documented limit, which takes precedence when stricter. Default ``60``. Every
+    concurrently-fetched ticker shares one limiter per provider, so this caps the
+    *aggregate* rate of a batch rather than the rate of each ticker in it.
+TICKERKIT_MAX_CONCURRENCY
+    How many tickers a batch fetch assembles at once. Default ``8``. Bounds sockets and
+    in-flight requests; it does not raise the request rate, which stays governed by
+    TICKERKIT_RATE_LIMIT and each provider's own limit.
 TICKERKIT_CACHE_TTL
     Default snapshot-cache TTL in seconds. Default ``30``.
 TICKERKIT_CACHE_ENABLED
@@ -130,6 +136,14 @@ class Config:
 
     http_timeout: float = 15.0
     rate_limit_rpm: int = 60
+    max_concurrency: int = 8
+    """Ceiling on how many tickers a batch fetch assembles at once.
+
+    This bounds sockets and in-flight requests, *not* request rate: each provider still
+    paces itself through its own rate limiter, which every concurrent ticker shares. So
+    raising this makes a batch start faster without ever exceeding the same requests per
+    minute. Lower it only to be gentler on connection pools or a fragile upstream.
+    """
     max_retries: int = 3
     retry_base_delay: float = 0.5
     retry_max_delay: float = 8.0
@@ -194,6 +208,7 @@ class Config:
             perp_exchanges=_env_tuple("TICKERKIT_PERP_EXCHANGES", DEFAULT_PERP_EXCHANGES),
             http_timeout=_env_float("TICKERKIT_HTTP_TIMEOUT", 15.0),
             rate_limit_rpm=_env_int("TICKERKIT_RATE_LIMIT", 60),
+            max_concurrency=_env_int("TICKERKIT_MAX_CONCURRENCY", 8),
             max_retries=_env_int("TICKERKIT_MAX_RETRIES", 3),
             retry_max_after=_env_float("TICKERKIT_MAX_RETRY_AFTER", 60.0),
             cache_enabled=_env_bool("TICKERKIT_CACHE_ENABLED", True),

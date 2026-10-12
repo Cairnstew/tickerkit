@@ -147,6 +147,41 @@ snap = tickerkit.get_ticker("ETH")          # refuses to run inside an event loo
 snap = asyncio.run(tickerkit.aget_ticker("ETH"))   # use this inside one
 ```
 
+### Many tickers
+
+`get_tickers` fetches a whole watchlist at once. The point is that adding tickers adds
+*concurrency*, never request rate — the batch shares one connection pool, one rate limiter
+per provider and one circuit breaker per source:
+
+```python
+snaps = await tickerkit.aget_tickers(["BTC", "ETH", "SOL", "ADA"], concurrency=4)
+rows = [tickerkit.flat_metrics(s) for s in snaps]      # one flat row per asset
+```
+
+- **Same requests-per-minute.** One `RateLimiter` per provider is shared by every ticker in
+  the batch. Twenty tickers draw from the provider's documented budget of twenty, not
+  twenty budgets.
+- **One 429 is paid for once.** A genuinely throttled source trips a breaker that the rest
+  of the batch shares, so the remaining tickers short-circuit instantly instead of each
+  spending its own retry budget on requests that are certain to fail. Suppressed calls are
+  still reported in `data_quality.rate_limited` with `suppressed=True`.
+- **`concurrency` is a pressure knob, not a rate knob** (default 8, or
+  `TICKERKIT_MAX_CONCURRENCY`). It bounds how many snapshots are assembled at once.
+- **Results match the input**, one per element. A ticker repeated in the list is fetched
+  **once** and the same snapshot returned for each occurrence.
+- **A provider failure never sinks a batch** — it lands in that snapshot's `DataQuality`.
+  Only a failure of a whole snapshot propagates, and `return_exceptions=True` hands it
+  back in place of the snapshot instead.
+
+```python
+# a bad ticker in the middle must not cost you the other 49
+results = await kit.get_tickers(watchlist, return_exceptions=True)
+ok = [r for r in results if isinstance(r, TickerSnapshot)]
+```
+
+`TickerKit.get_history` remains one asset at a time: a deep backfill spends many upstream
+calls per series and is worth pacing deliberately.
+
 ### Overrides
 
 ```python
@@ -307,6 +342,17 @@ hist     = HistoryResult.from_json(open("btc_2021_2024.json").read())
 ---
 
 ## Configuration
+
+Everything is environment-driven; see the `Config` docstring in `src/tickerkit/config.py`
+for the full list. The two that govern batch fetching are:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TICKERKIT_RATE_LIMIT` | `60` | Safety-net requests/minute. **Shared** by every ticker in a batch, so it caps the aggregate rate rather than each ticker's. |
+| `TICKERKIT_MAX_CONCURRENCY` | `8` | How many tickers are assembled at once. Bounds sockets, not request rate. |
+
+Each provider additionally applies its own documented limit, which takes precedence when
+stricter.
 
 > Deep history (see below) is exercised in `examples/history.py` and in the notebook's
 > section 10.
@@ -569,6 +615,19 @@ summarise(snap)
   over ~8 calls per provider, and without this a throttled source would receive eight
   more 429s purely to record eight copies of the same failure. Breakers are per source,
   so CoinGecko being exhausted never blocks DefiLlama or the exchanges.
+- **Rate limiters are shared, not per-call.** One limiter per provider lives on the
+  `TickerKit` instance, so a batch of N tickers draws from one requests-per-minute budget
+  rather than behaving like N independent clients. This is also true *within* one snapshot:
+  resolution and the capability fan-out share the provider's budget instead of quietly
+  asking for double.
+- **A breaker is re-checked after the rate-limit wait.** Acquiring a slot is itself a
+  queue, so a caller can wait a second and reach a source that has since gone dark. The
+  breaker is consulted again at that point, which is what makes sharing it save quota
+  rather than merely describe it — and one caller's cooldown never reopens the source for
+  everyone else queued behind it.
+- **Concurrency is bounded separately from rate.** `TICKERKIT_MAX_CONCURRENCY` (default 8)
+  caps how many snapshots are assembled at once; it never raises the request rate, which
+  stays governed by `TICKERKIT_RATE_LIMIT` and each provider's own documented limit.
 - **Redundant keyless sources.** CoinPaprika (keyless, 20k calls/mo) carries price and
   market cap when CoinGecko's keyless tier throttles, so a rate-limited snapshot
   degrades instead of emptying.
@@ -682,6 +741,9 @@ tickerkit BTC --metrics                # one flat JSON row (pipeline shape)
 tickerkit ETH --frames ohlcv venues    # DataFrame views
 tickerkit SOL --show-errors            # tolerated errors, missing data, ambiguities
 tickerkit BTC --exchanges kraken --quote EUR
+tickerkit BTC ETH SOL                  # a whole watchlist, fetched concurrently
+tickerkit BTC ETH SOL --metrics        # one flat JSON row per asset (an array)
+tickerkit BTC ETH --concurrency 2      # be gentler on sockets; same requests/minute
 tickerkit BTC --history --timeframe 1d --start 2017-01-01 --end 2024-01-01
 tickerkit BTC --history --report       # full history report (sources + consensus + quality)
 tickerkit BTC --history --metrics      # one flat history row with completeness flags
@@ -690,7 +752,11 @@ tickerkit cache stats                  # disk-cache size / bounds / expiry (prun
 ```
 
 Exit code is `0` when the object was produced (a snapshot with a price, or a history with
-at least one series), `1` otherwise.
+at least one series), `1` otherwise. With several tickers the batch fails if *any* of them
+came back without a price.
+
+`--history` takes a single ticker; it is the expensive path, so asking for several is
+refused rather than silently serving only the first.
 
 ---
 
