@@ -16,8 +16,8 @@ from tickerkit import Config, RateLimitExceeded, TickerKit
 from tickerkit.capabilities import Capability
 from tickerkit.http import MAX_RETRY_AFTER, HttpClient, parse_retry_after
 from tickerkit.models import ProviderError
-from tickerkit.providers.coinpaprika import CoinPaprikaProvider
 from tickerkit.providers.coingecko import CoinGeckoProvider
+from tickerkit.providers.coinpaprika import CoinPaprikaProvider
 
 URL = "https://example.test/data"
 
