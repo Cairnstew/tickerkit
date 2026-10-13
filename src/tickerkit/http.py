@@ -18,6 +18,10 @@ from .config import Config
 from .errors import RateLimitExceeded
 
 #: HTTP statuses worth another attempt.
+# 402 is deliberately absent: a *bare* 402 is a permanent entitlement failure, and
+# retrying one would only burn the retry budget on a dead end. A 402 that advertises a
+# retry window (see `_advertises_retry`) is a quota throttle and is handled on the
+# breaker path alongside 429 instead.
 RETRYABLE_STATUS: frozenset[int] = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 #: Cap on how long a provider may park us via ``Retry-After``. A hostile or buggy value
@@ -78,14 +82,36 @@ def parse_retry_after(
     return None
 
 
+def _advertises_retry(exc: httpx.HTTPStatusError) -> bool:
+    """Whether a 402 carries a retry window, making it a quota throttle.
+
+    CoinPaprika's keyless tier answers 402 with ``retry-after`` plus a body spelling
+    out ``hard_limit`` (25k/month) and ``soft_limit`` (60/hour) — the source is saying
+    it is *temporarily* out of quota and when to come back, not that we may never call
+    it. A bare 402 with no such hint is a permanent entitlement failure and must stay
+    one: retrying it would only burn the retry budget on a dead end.
+    """
+    headers = exc.response.headers
+    if headers.get("retry-after"):
+        return True
+    return any(
+        headers.get(n) for n in ("x-ratelimit-reset", "ratelimit-reset", "x-rate-limit-reset")
+    )
+
+
 def _limit_hint(source: str) -> str:
     """A remediation hint, provider-specific where we know the answer."""
     known = {
         "coingecko": (
             "set TICKERKIT_COINGECKO_API_KEY (Demo) or TICKERKIT_COINGECKO_PRO_API_KEY "
-            "for 100+/min instead of the 25/min keyless IP limit"
+            "for 100+/min instead of the 12/min keyless IP limit"
         ),
         "coinmarketcap": "set TICKERKIT_CMC_API_KEY",
+        "coinpaprika": (
+            "the keyless tier allows 60 requests/hour and 25k/month; a full watchlist "
+            "sweep spends most of an hour's quota, so shrink the watchlist, wait for "
+            "retry-after to elapse, or rely on another source"
+        ),
     }
     return known.get(source, GENERIC_HINT)
 
@@ -297,7 +323,11 @@ class HttpClient:
                 return response.json()
             except httpx.HTTPStatusError as exc:
                 status = exc.response.status_code
-                if status == 429:
+                # 402 is a throttle only when the source says when to come back — see
+                # `_advertises_retry`. A bare 402 stays a hard failure: it is not in
+                # RETRYABLE_STATUS, so it is neither retried nor allowed to open the
+                # breaker, and a permanently-unentitled source must not look throttled.
+                if status == 429 or (status == 402 and _advertises_retry(exc)):
                     throttle_delay = self._throttle_delay(exc, attempt)  # raises if spent
                 elif status not in RETRYABLE_STATUS or attempt >= self._policy.max_retries:
                     raise
@@ -343,7 +373,8 @@ class HttpClient:
             self._blocked_until = time.monotonic() + min(cooldown, self._policy.max_after)
             raise RateLimitExceeded(
                 self.source,
-                f"{self.source} returned HTTP 429 after {attempt + 1} attempt(s)",
+                f"{self.source} returned HTTP {exc.response.status_code} "
+                f"after {attempt + 1} attempt(s)",
                 retry_after=cooldown,
                 limit=_header_int(headers, "x-ratelimit-limit", "ratelimit-limit",
                                   "x-rate-limit-limit"),

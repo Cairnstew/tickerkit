@@ -154,9 +154,13 @@ async def test_pro_api_key_switches_base_url_and_header() -> None:
         await http.aclose()
 
 
-def test_rate_limit_reflects_keyless_vs_demo() -> None:
-    """Keyless access is IP-shared and far tighter than the documented 100/min demo."""
-    assert CoinGeckoProvider.rate_limit_rpm(Config()) == 25
+    def test_rate_limit_reflects_keyless_vs_demo() -> None:
+        """Keyless access is IP-shared and far tighter than the documented 100/min demo.
+
+        12 rpm, not the previous 25: the bucket is shared with any other consumer on the
+        same IP, and a measured 15-ticker sweep at 25 rpm tripped a genuine 429 mid-run.
+        """
+        assert CoinGeckoProvider.rate_limit_rpm(Config()) == 12
     assert CoinGeckoProvider.rate_limit_rpm(Config(coingecko_api_key="k")) == 100
     assert CoinGeckoProvider.rate_limit_rpm(Config(coingecko_pro_api_key="k")) == 100
 

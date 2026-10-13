@@ -61,7 +61,11 @@ DEMO_RATE_LIMIT_RPM = 100
 #: Conservative default for keyless access. The docs state keyless is "IP-based rate
 #: limiting - shared across all users on the same IP", which is far tighter than the Demo
 #: plan's 100/min in practice, so tickerkit throttles harder until a key is supplied.
-KEYLESS_RATE_LIMIT_RPM = 25
+#: 12 rpm rather than the previous 25: the bucket is *shared*, so another consumer on
+#: the same IP (a second process, a neighbouring NAT user) draws from it too, and a
+#: measured 15-ticker sweep at 25 rpm tripped a genuine 429 mid-run. Halving leaves
+#: headroom for a co-existing consumer instead of spending the whole IP budget.
+KEYLESS_RATE_LIMIT_RPM = 12
 
 
 class CoinGeckoProvider(Provider):

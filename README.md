@@ -440,7 +440,7 @@ the repo.
 | `TICKERKIT_COINGECKO_PRO_API_KEY` | — | Optional CoinGecko **Pro** key |
 | `TICKERKIT_CMC_API_KEY` | — | Enables the optional CoinMarketCap source |
 
-A Demo key raises the CoinGecko throttle from 25/min (keyless, IP-shared) to the
+A Demo key raises the CoinGecko throttle from 12/min (keyless, IP-shared) to the
 documented 100/min.
 
 ---
@@ -590,20 +590,24 @@ summarise(snap)
 ## Reliability
 
 - **Per-provider rate limiters.** CoinGecko documents 100 calls/min on the Demo plan;
-  keyless is IP-shared and far tighter, so tickerkit throttles to 25/min until a key is
-  present. CoinPaprika's ceiling is a *monthly* budget (20,000 calls), so it is
-  self-throttled to a gentle 30/min rather than spending the month in a minute. ccxt
-  manages its own request weight internally.
-- **Throttling is identified, not just retried.** A 429 becomes a structured
-  `RateLimitExceeded` carrying the source, the advertised `Retry-After`, the quota
-  headers, and a concrete remedy ("set `TICKERKIT_COINGECKO_API_KEY`"). These surface on
-  the snapshot as `data_quality.rate_limited` / `.throttled`, so a pipeline can react
-  without string-matching exception names:
+  keyless is IP-shared and far tighter, so tickerkit throttles to 12/min until a key is
+  present. CoinPaprika's keyless ceiling is **60 requests/hour** (soft) and 25k/month
+  (hard), so it is self-throttled to a gentle 30/min rather than spending an hour's
+  quota in a minute — note a per-minute limiter cannot by itself protect an *hourly*
+  budget. ccxt manages its own request weight internally.
+- **Throttling is identified, not just retried.** A 429 — and a **402 that advertises a
+  retry window**, which is how CoinPaprika reports an exhausted hourly quota — becomes a
+  structured `RateLimitExceeded` carrying the source, the advertised `Retry-After`, the
+  quota headers, and a concrete remedy ("set `TICKERKIT_COINGECKO_API_KEY`"). A *bare*
+  402 with no retry hint stays a hard failure, so a permanently-unentitled source never
+  masquerades as a throttle. These surface on the snapshot as
+  `data_quality.rate_limited` / `.throttled`, so a pipeline can react without
+  string-matching exception names:
 
   ```console
   rate limit   coingecko/resolve: retry in 60s
                remedy: set TICKERKIT_COINGECKO_API_KEY (Demo) or ..._PRO_API_KEY
-               for 100+/min instead of the 25/min keyless IP limit
+               for 100+/min instead of the 12/min keyless IP limit
   ```
 
   `Retry-After` (delta-seconds, HTTP-date, and CoinGecko's epoch `x-ratelimit-reset`) is

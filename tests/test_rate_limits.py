@@ -16,6 +16,7 @@ from tickerkit import Config, RateLimitExceeded, TickerKit
 from tickerkit.capabilities import Capability
 from tickerkit.http import MAX_RETRY_AFTER, HttpClient, parse_retry_after
 from tickerkit.models import ProviderError
+from tickerkit.providers.coinpaprika import CoinPaprikaProvider
 from tickerkit.providers.coingecko import CoinGeckoProvider
 
 URL = "https://example.test/data"
@@ -238,3 +239,100 @@ class TestSnapshotSurfacesThrottling:
         assert "rate limit" in out
         assert "coingecko/agg_market" in out
         assert "TICKERKIT_COINGECKO_API_KEY" in out
+
+
+class TestPaymentRequiredThrottle:
+    """A 402 that advertises a retry window is a quota throttle, not a dead source.
+
+    CoinPaprika's keyless tier answers 402 with ``retry-after`` and a body spelling out
+    ``hard_limit`` (25k/month) / ``soft_limit`` (60/hour). Treating that as a hard failure
+    meant the breaker never opened, so every concurrent capability independently spent
+    its retry budget against a source that had already said "come back in an hour".
+    """
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_402_with_retry_window_raises_structured_error(self) -> None:
+        route = respx.get(URL).mock(
+            return_value=httpx.Response(
+                402,
+                headers={"Retry-After": "3351", "X-RateLimit-Limit": "60"},
+                json={
+                    "type": "payment_required",
+                    "hard_limit": "25k requests per month",
+                    "soft_limit": "60 requests per hour",
+                },
+            )
+        )
+        client = HttpClient(config=Config(max_retries=0, retry_max_after=3600.0))
+        with pytest.raises(RateLimitExceeded) as excinfo:
+            await client.get_json(URL)
+
+        err = excinfo.value
+        assert err.source == "http"
+        # The advertised window is honoured, not replaced by a local backoff guess.
+        assert err.retry_after == pytest.approx(3351, abs=1)
+        assert err.hint  # a remedy is always offered
+        assert not err.suppressed
+        assert route.call_count == 1
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_402_opens_the_breaker_so_siblings_short_circuit(self) -> None:
+        """The point of recognising a 402 as a throttle: no further requests leave."""
+        route = respx.get(URL).mock(
+            return_value=httpx.Response(402, headers={"Retry-After": "3351"})
+        )
+        client = _client(source="coinpaprika")
+
+        with pytest.raises(RateLimitExceeded):
+            await client.get_json(URL)
+        assert client.is_throttled, "a quota 402 must open the breaker like a 429"
+        spent = route.call_count
+
+        for _ in range(4):  # sibling capabilities racing the same exhausted source
+            with pytest.raises(RateLimitExceeded) as excinfo:
+                await client.get_json(URL)
+            assert excinfo.value.suppressed is True
+
+        assert route.call_count == spent, "the breaker must stop the stampede"
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_bare_402_stays_a_hard_failure(self) -> None:
+        """A 402 with no retry window is permanent — it must not be retried or throttled."""
+        route = respx.get(URL).mock(
+            return_value=httpx.Response(402, json={"type": "payment_required"})
+        )
+        client = _client()
+
+        with pytest.raises(httpx.HTTPStatusError) as excinfo:
+            await client.get_json(URL)
+        assert excinfo.value.response.status_code == 402
+        assert not client.is_throttled, "a bare 402 must not look throttled"
+        assert route.call_count == 1, "a permanent 402 must not be retried"
+        await client.aclose()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_402_is_reported_as_a_throttle_with_a_remedy(self) -> None:
+        respx.get(url__startswith="https://api.coinpaprika.com").mock(
+            return_value=httpx.Response(402, headers={"Retry-After": "3351"})
+        )
+        kit = TickerKit(
+            config=Config(max_retries=0, retry_max_after=0.01, cache_ttl=0),
+            providers=(CoinPaprikaProvider,),
+        )
+        snap = await kit.get_ticker("BTC", cache_ttl=0)
+
+        dq = snap.data_quality
+        assert dq.throttled is True, "a quota 402 must be reported as a throttle"
+        assert dq.rate_limited, "and recorded in data_quality"
+        assert dq.rate_limited[0].source == "coinpaprika"
+        assert dq.rate_limited[0].retry_after is not None
+        # The remedy must name the real constraint, not the generic hint.
+        assert "60 requests/hour" in (dq.rate_limited[0].remedy or "")
+        # It stays an error too — a snapshot must never hide a failed source.
+        assert any(isinstance(e, ProviderError) for e in dq.errors)

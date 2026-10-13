@@ -334,9 +334,9 @@ class TestQuotaIsShared:
 
 
 class _FastPacedCoinGecko(CoinGeckoProvider):
-    """CoinGecko with its 25/min keyless pacing removed.
+    """CoinGecko with its 12/min keyless pacing removed.
 
-    The pacing is real and worth keeping in production, but at 2.4s between calls it
+    The pacing is real and worth keeping in production, but at 5s between calls it
     would make these tests take minutes. The name stays ``coingecko`` so the source — and
     therefore the shared breaker under test — is keyed exactly as it is in production.
     """
